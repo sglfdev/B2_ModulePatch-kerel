@@ -1,0 +1,1479 @@
+From 8e19ff623aae673f6c614b5be89bd0bcce85bada Mon Sep 17 00:00:00 2001
+From: KangDroid <kanghw0720@naver.com>
+Date: Tue, 28 Jan 2014 23:11:31 +0900
+Subject: [PATCH] Fix Wifi for B2 Module/Board
+
+---
+ drivers/net/wireless/bcmdhd/Kconfig                |  1 -
+ drivers/net/wireless/bcmdhd/Makefile               | 18 ++---
+ drivers/net/wireless/bcmdhd/bcmsdh.c               | 20 +-----
+ drivers/net/wireless/bcmdhd/bcmsdh_linux.c         | 16 +----
+ drivers/net/wireless/bcmdhd/bcmsdh_sdmmc_linux.c   |  4 +-
+ drivers/net/wireless/bcmdhd/bcmsdspi_linux.c       | 44 ++++--------
+ drivers/net/wireless/bcmdhd/bcmspibrcm.c           | 20 ++----
+ drivers/net/wireless/bcmdhd/dhd.h                  |  1 +
+ drivers/net/wireless/bcmdhd/dhd_common.c           |  8 +--
+ drivers/net/wireless/bcmdhd/dhd_custom_sec.c       | 47 ++-----------
+ drivers/net/wireless/bcmdhd/dhd_linux.c            | 59 +++++-----------
+ drivers/net/wireless/bcmdhd/dhd_sdio.c             | 29 ++------
+ drivers/net/wireless/bcmdhd/dhd_sec_feature.h      |  8 ---
+ drivers/net/wireless/bcmdhd/include/bcmsdh_sdmmc.h |  6 +-
+ drivers/net/wireless/bcmdhd/include/bcmspibrcm.h   |  6 +-
+ drivers/net/wireless/bcmdhd/include/epivers.h      | 12 ++--
+ drivers/net/wireless/bcmdhd/include/proto/wpa.h    |  2 +-
+ drivers/net/wireless/bcmdhd/include/wlioctl.h      | 14 ++--
+ drivers/net/wireless/bcmdhd/linux_osl.c            | 13 ++--
+ drivers/net/wireless/bcmdhd/wl_android.c           | 15 ++--
+ drivers/net/wireless/bcmdhd/wl_cfg80211.h          | 14 +---
+ drivers/net/wireless/bcmdhd/wl_cfgp2p.c            | 80 +++++++++++-----------
+ drivers/net/wireless/bcmdhd/wl_cfgp2p.h            | 12 +---
+ 23 files changed, 147 insertions(+), 302 deletions(-)
+
+diff --git a/drivers/net/wireless/bcmdhd/Kconfig b/drivers/net/wireless/bcmdhd/Kconfig
+index 24265d3..067b5e6 100644
+--- a/drivers/net/wireless/bcmdhd/Kconfig
++++ b/drivers/net/wireless/bcmdhd/Kconfig
+@@ -72,7 +72,6 @@ config WLAN_REGION_CODE
+ 		- 202 : KOR KTT
+ 		- 203 : KOR LGT
+ 		- 300 : CHN OPEN
+-		- 400 : JPN OPEN
+ 
+ config BROADCOM_WIFI
+ 	bool "Broadcom WiFi Driver"
+diff --git a/drivers/net/wireless/bcmdhd/Makefile b/drivers/net/wireless/bcmdhd/Makefile
+index adf76c4..17fa70c 100644
+--- a/drivers/net/wireless/bcmdhd/Makefile
++++ b/drivers/net/wireless/bcmdhd/Makefile
+@@ -10,7 +10,7 @@ DHDCFLAGS = -Wall -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER             \
+         -DMMC_SDIO_ABORT -DBCMSDIO -DBCMLXSDMMC -DBCMPLATFORM_BUS -DWLP2P     \
+         -DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT          \
+         -DKEEP_ALIVE -DCSCAN -DPKT_FILTER_SUPPORT                             \
+-        -DEMBEDDED_PLATFORM -DPNO_SUPPORT -DWLBTAMP
++        -DEMBEDDED_PLATFORM -DPNO_SUPPORT
+ 
+ #################
+ # Common feature
+@@ -21,9 +21,6 @@ DHDCFLAGS += -DBLOCK_IPV6_PACKET -DPASS_IPV4_SUSPEND
+ DHDCFLAGS += -DSUPPORT_DEEP_SLEEP
+ DHDCFLAGS += -DSIMPLE_MAC_PRINT
+ 
+-# Print out kernel panic point of file and line info when assertion happened
+-DHDCFLAGS += -DBCMASSERT_LOG
+-
+ # For p2p connection issue
+ DHDCFLAGS += -DWL_CFG80211_GON_COLLISION
+ DHDCFLAGS += -DWL_SCB_TIMEOUT=10
+@@ -123,9 +120,10 @@ ifneq ($(CONFIG_BCM43241),)
+   DHDCFLAGS += -DDHD_USE_IDLECOUNT
+   DHDCFLAGS += -DSUPPORT_AMPDU_MPDU_CMD
+   DHDCFLAGS += -DMIMO_ANT_SETTING -DAMPDU_HOSTREORDER
+-  DHDCFLAGS += -DCUSTOM_GLOM_SETTING=1 -DCUSTOM_SDIO_F2_BLKSIZE=128
++  DHDCFLAGS += -DCUSTOM_GLOM_SETTING=1
+   DHDCFLAGS += -DROAM_AP_ENV_DETECTION
+   DHDCFLAGS += -DSDIO_CRC_ERROR_FIX
++  DHDCFLAGS += -DCUSTOM_SDIO_F2_BLKSIZE=128
+   ifeq ($(CONFIG_BCM43241),m)
+     DHDCFLAGS += -fno-pic
+   endif
+@@ -137,8 +135,7 @@ endif
+ #############################
+ 
+ ifeq ($(CONFIG_SPI_SC8810),y)
+-  DHDCFLAGS += -DREAD_MACADDR -DBCMSPI -DBCMSPI_ANDROID -DSPI_PIO_32BIT_RW -DSPI_PIO_RW_BIGENDIAN
+-  DHDCFLAGS += -UCUSTOM_DPC_PRIO_SETTING
++  DHDCFLAGS += -DREAD_MACADDR -DBCMSPI -DBCMSPI_ANDROID -DSPI_PIO_32BIT_RW -DSPI_PIO_RW_BIGENDIAN -DDISABLE_11N
+ 
+   #Remove defines for SDMMC
+   DHDCFLAGS :=$(filter-out -DOOB_INTR_ONLY,$(DHDCFLAGS))
+@@ -185,10 +182,6 @@ ifeq ($(CONFIG_TARGET_LOCALE_CHN),y)
+ REGION_CODE=300
+ endif
+ 
+-ifeq ($(CONFIG_TARGET_LOCALE_JPN),y)
+-REGION_CODE=400
+-endif
+-
+ ifeq ($(SEC_MODEL_NAME),U1)
+ ifeq ($(X_BUILD_LOCALE),EUR_ORG)
+ REGION_CODE=101
+@@ -201,7 +194,6 @@ endif
+ 
+ DHDCFLAGS += -DWLAN_REGION_CODE=$(REGION_CODE)
+ 
+-DHDCFLAGS += -include "dhd_sec_feature.h"
+ ##############################################################
+ 
+ #########
+@@ -216,7 +208,7 @@ EXTRA_CFLAGS += -I$(src)/include/ -I$(src)/
+ KBUILD_CFLAGS += -I$(LINUXDIR)/include -I$(shell pwd)
+ 
+ DHDOFILES := bcmsdh.o bcmsdh_linux.o bcmsdh_sdmmc.o bcmsdh_sdmmc_linux.o \
+-	dhd_bta.o dhd_cdc.o dhd_common.o dhd_custom_gpio.o dhd_custom_sec.o \
++	dhd_cdc.o dhd_common.o dhd_custom_gpio.o dhd_custom_sec.o \
+ 	dhd_linux.o dhd_linux_sched.o dhd_cfg80211.o dhd_sdio.o aiutils.o bcmevent.o \
+ 	bcmutils.o bcmwifi_channels.o hndpmu.o linux_osl.o sbutils.o siutils.o \
+ 	wl_android.o wl_cfg80211.o wl_cfgp2p.o wldev_common.o wl_linux_mon.o wl_roam.o
+diff --git a/drivers/net/wireless/bcmdhd/bcmsdh.c b/drivers/net/wireless/bcmdhd/bcmsdh.c
+index 92279ae..2f7c451 100644
+--- a/drivers/net/wireless/bcmdhd/bcmsdh.c
++++ b/drivers/net/wireless/bcmdhd/bcmsdh.c
+@@ -22,7 +22,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmsdh.c 373329 2012-12-07 04:46:09Z $
++ * $Id: bcmsdh.c 347614 2012-07-27 10:24:51Z $
+  */
+ 
+ /**
+@@ -45,6 +45,8 @@
+ 
+ #include <sdio.h>	/* SDIO Device and Protocol Specs */
+ 
++#include <dhd_sec_feature.h>
++
+ #define SDIOH_API_ACCESS_RETRY_LIMIT	2
+ const uint bcmsdh_msglevel = BCMSDH_ERROR_VAL;
+ 
+@@ -157,17 +159,9 @@ bcmsdh_intr_enable(void *sdh)
+ {
+ 	bcmsdh_info_t *bcmsdh = (bcmsdh_info_t *)sdh;
+ 	SDIOH_API_RC status;
+-#ifdef BCMSPI_ANDROID
+-	uint32 data;
+-#endif /* BCMSPI_ANDROID */
+ 	ASSERT(bcmsdh);
+ 
+ 	status = sdioh_interrupt_set(bcmsdh->sdioh, TRUE);
+-#ifdef BCMSPI_ANDROID
+-	data = bcmsdh_cfg_read_word(sdh, 0, 4, NULL);
+-	data |= 0xE0E70000;
+-	bcmsdh_cfg_write_word(sdh, 0, 4, data, NULL);
+-#endif /* BCMSPI_ANDROID */
+ 	return (SDIOH_API_SUCCESS(status) ? 0 : BCME_ERROR);
+ }
+ 
+@@ -176,17 +170,9 @@ bcmsdh_intr_disable(void *sdh)
+ {
+ 	bcmsdh_info_t *bcmsdh = (bcmsdh_info_t *)sdh;
+ 	SDIOH_API_RC status;
+-#ifdef BCMSPI_ANDROID
+-	uint32 data;
+-#endif /* BCMSPI_ANDROID */
+ 	ASSERT(bcmsdh);
+ 
+ 	status = sdioh_interrupt_set(bcmsdh->sdioh, FALSE);
+-#ifdef BCMSPI_ANDROID
+-	data = bcmsdh_cfg_read_word(sdh, 0, 4, NULL);
+-	data &= ~0xE0E70000;
+-	bcmsdh_cfg_write_word(sdh, 0, 4, data, NULL);
+-#endif /* BCMSPI_ANDROID */
+ 	return (SDIOH_API_SUCCESS(status) ? 0 : BCME_ERROR);
+ }
+ 
+diff --git a/drivers/net/wireless/bcmdhd/bcmsdh_linux.c b/drivers/net/wireless/bcmdhd/bcmsdh_linux.c
+index 3ea4f75..c6923d4 100644
+--- a/drivers/net/wireless/bcmdhd/bcmsdh_linux.c
++++ b/drivers/net/wireless/bcmdhd/bcmsdh_linux.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmsdh_linux.c 373329 2012-12-07 04:46:09Z $
++ * $Id: bcmsdh_linux.c 363783 2012-10-19 06:27:14Z $
+  */
+ 
+ /**
+@@ -636,9 +636,7 @@ static irqreturn_t wlan_oob_irq(int irq, void *dev_id)
+ 
+ 	dhdp = (dhd_pub_t *)dev_get_drvdata(sdhcinfo->dev);
+ 
+-#ifndef BCMSPI_ANDROID
+ 	bcmsdh_oob_intr_set(0);
+-#endif /* !BCMSPI_ANDROID */
+ 
+ 	if (dhdp == NULL) {
+ 		SDLX_MSG(("Out of band GPIO interrupt fired way too early\n"));
+@@ -669,13 +667,7 @@ int bcmsdh_register_oob_intr(void * dhdp)
+ 		if (error)
+ 			return -ENODEV;
+ 
+-#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI)
+-		if (device_may_wakeup(sdhcinfo->dev)) {
+-#endif
+ 		error = enable_irq_wake(sdhcinfo->oob_irq);
+-#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI)
+-		}
+-#endif
+ 		if (error)
+ 			SDLX_MSG(("%s enable_irq_wake error=%d \n", __FUNCTION__, error));
+ 		sdhcinfo->oob_irq_registered = TRUE;
+@@ -692,15 +684,9 @@ void bcmsdh_set_irq(int flag)
+ 		sdhcinfo->oob_irq_enable_flag = flag;
+ 		if (flag) {
+ 			enable_irq(sdhcinfo->oob_irq);
+-#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI)
+-			if (device_may_wakeup(sdhcinfo->dev))
+-#endif
+ 			enable_irq_wake(sdhcinfo->oob_irq);
+ 		} else {
+ #if !(defined(BCMSPI_ANDROID) && defined(CUSTOMER_HW4) && defined(CONFIG_NKERNEL))
+-#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI)
+-			if (device_may_wakeup(sdhcinfo->dev))
+-#endif
+ 			disable_irq_wake(sdhcinfo->oob_irq);
+ #endif /* !defined(BCMSPI_ANDROID) */
+ 			disable_irq(sdhcinfo->oob_irq);
+diff --git a/drivers/net/wireless/bcmdhd/bcmsdh_sdmmc_linux.c b/drivers/net/wireless/bcmdhd/bcmsdh_sdmmc_linux.c
+index 93eda2d..ba0f51f 100644
+--- a/drivers/net/wireless/bcmdhd/bcmsdh_sdmmc_linux.c
++++ b/drivers/net/wireless/bcmdhd/bcmsdh_sdmmc_linux.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmsdh_sdmmc_linux.c 372067 2012-11-30 08:03:06Z $
++ * $Id: bcmsdh_sdmmc_linux.c 363783 2012-10-19 06:27:14Z $
+  */
+ 
+ #include <typedefs.h>
+@@ -297,11 +297,13 @@ static struct sdio_driver bcmsdh_sdmmc_driver = {
+ 	.remove		= bcmsdh_sdmmc_remove,
+ 	.name		= "bcmsdh_sdmmc",
+ 	.id_table	= bcmsdh_sdmmc_ids,
++#if !defined(CONFIG_ARCH_RHEA) || !defined(CONFIG_ARCH_CAPRI)
+ #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) && defined(CONFIG_PM)
+ 	.drv = {
+ 	.pm	= &bcmsdh_sdmmc_pm_ops,
+ 	},
+ #endif /* (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) && defined(CONFIG_PM) */
++#endif /* !defined(CONFIG_ARCH_RHEA) || !defined(CONFIG_ARCH_CAPRI) */
+ 	};
+ 
+ struct sdos_info {
+diff --git a/drivers/net/wireless/bcmdhd/bcmsdspi_linux.c b/drivers/net/wireless/bcmdhd/bcmsdspi_linux.c
+index 3b3df2f..e834366 100644
+--- a/drivers/net/wireless/bcmdhd/bcmsdspi_linux.c
++++ b/drivers/net/wireless/bcmdhd/bcmsdspi_linux.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmsdspi_linux.c 373329 2012-12-07 04:46:09Z $
++ * $Id: bcmsdspi_linux.c 355376 2012-09-06 13:23:59Z $
+  */
+ 
+ #include <typedefs.h>
+@@ -30,36 +30,26 @@
+ #include <bcmsdbus.h>		/* bcmsdh to/from specific controller APIs */
+ #include <sdiovar.h>		/* to get msglevel bit values */
+ 
+-#ifdef BCMSPI_ANDROID
+-#include <bcmsdh.h>
+-#include <bcmspibrcm.h>
+-#include <linux/spi/spi.h>
+-#else
++#ifndef BCMSPI_ANDROID
+ #include <pcicfg.h>
+ #include <sdio.h>		/* SDIO Device and Protocol Specs */
+ #include <linux/sched.h>	/* request_irq(), free_irq() */
+ #include <bcmsdspi.h>
+ #include <bcmspi.h>
+-#endif /* BCMSPI_ANDROID */
+ 
+-#ifndef BCMSPI_ANDROID
+ extern uint sd_crc;
+ module_param(sd_crc, uint, 0);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0))
+ #define KERNEL26
+ #endif
+-#endif /* !BCMSPI_ANDROID */
+ 
+ struct sdos_info {
+ 	sdioh_info_t *sd;
+ 	spinlock_t lock;
+-#ifndef BCMSPI_ANDROID
+ 	wait_queue_head_t intr_wait_queue;
+-#endif /* !BCMSPI_ANDROID */
+ };
+ 
+-#ifndef BCMSPI_ANDROID
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0))
+ #define BLOCKABLE()	(!in_atomic())
+ #else
+@@ -96,9 +86,10 @@ sdspi_isr(int irq, void *dev_id
+ 		return IRQ_RETVAL(ours);
+ 	}
+ }
+-#endif /* !BCMSPI_ANDROID */
++#else /* !BCMSPI_ANDROID */
++#include <bcmspibrcm.h>
++#include <linux/spi/spi.h>
+ 
+-#ifdef BCMSPI_ANDROID
+ static struct spi_device *gBCMSPI = NULL;
+ 
+ extern int bcmsdh_probe(struct device *dev);
+@@ -168,7 +159,7 @@ void spi_function_cleanup(void)
+ 	sd_trace(("%s Enter\n", __FUNCTION__));
+ 	spi_unregister_driver(&bcmsdh_spi_driver);
+ }
+-#endif /* BCMSPI_ANDROID */
++#endif /* !BCMSPI_ANDROID */
+ 
+ /* Register with Linux for interrupts */
+ int
+@@ -211,6 +202,7 @@ spi_reg_unmap(osl_t *osh, uintptr addr, int size)
+ int
+ spi_osinit(sdioh_info_t *sd)
+ {
++#ifndef BCMSPI_ANDROID
+ 	struct sdos_info *sdos;
+ 
+ 	sdos = (struct sdos_info*)MALLOC(sd->osh, sizeof(struct sdos_info));
+@@ -220,7 +212,6 @@ spi_osinit(sdioh_info_t *sd)
+ 
+ 	sdos->sd = sd;
+ 	spin_lock_init(&sdos->lock);
+-#ifndef BCMSPI_ANDROID
+ 	init_waitqueue_head(&sdos->intr_wait_queue);
+ #endif /* !BCMSPI_ANDROID */
+ return BCME_OK;
+@@ -229,17 +220,20 @@ return BCME_OK;
+ void
+ spi_osfree(sdioh_info_t *sd)
+ {
++#ifndef BCMSPI_ANDROID
+ 	struct sdos_info *sdos;
+ 	ASSERT(sd && sd->sdos_info);
+ 
+ 	sdos = (struct sdos_info *)sd->sdos_info;
+ 	MFREE(sd->osh, sdos, sizeof(struct sdos_info));
++#endif /* !BCMSPI_ANDROID */
+ }
+ 
+ /* Interrupt enable/disable */
+ SDIOH_API_RC
+ sdioh_interrupt_set(sdioh_info_t *sd, bool enable)
+ {
++#ifndef BCMSPI_ANDROID
+ 	ulong flags;
+ 	struct sdos_info *sdos;
+ 
+@@ -253,25 +247,22 @@ sdioh_interrupt_set(sdioh_info_t *sd, bool enable)
+ 		return SDIOH_API_RC_FAIL;
+ 	}
+ 
+-#ifndef BCMSPI_ANDROID
+ 	if (enable && !(sd->intr_handler && sd->intr_handler_arg)) {
+ 		sd_err(("%s: no handler registered, will not enable\n", __FUNCTION__));
+ 		return SDIOH_API_RC_FAIL;
+ 	}
+-#endif /* !BCMSPI_ANDROID */
+ 
+ 	/* Ensure atomicity for enable/disable calls */
+ 	spin_lock_irqsave(&sdos->lock, flags);
+ 
+ 	sd->client_intr_enabled = enable;
+-#ifndef BCMSPI_ANDROID
+ 	if (enable && !sd->lockcount)
+ 		spi_devintr_on(sd);
+ 	else
+ 		spi_devintr_off(sd);
+-#endif /* !BCMSPI_ANDROID */
+ 
+ 	spin_unlock_irqrestore(&sdos->lock, flags);
++#endif /* !BCMSPI_ANDROID */
+ 
+ 	return SDIOH_API_RC_SUCCESS;
+ }
+@@ -280,6 +271,7 @@ sdioh_interrupt_set(sdioh_info_t *sd, bool enable)
+ void
+ spi_lock(sdioh_info_t *sd)
+ {
++#ifndef BCMSPI_ANDROID
+ 	ulong flags;
+ 	struct sdos_info *sdos;
+ 
+@@ -293,20 +285,17 @@ spi_lock(sdioh_info_t *sd)
+ 		sd_err(("%s: Already locked!\n", __FUNCTION__));
+ 		ASSERT(sd->lockcount == 0);
+ 	}
+-#ifdef BCMSPI_ANDROID
+-	if (sd->client_intr_enabled)
+-		bcmsdh_oob_intr_set(0);
+-#else
+ 	spi_devintr_off(sd);
+-#endif /* BCMSPI_ANDROID */
+ 	sd->lockcount++;
+ 	spin_unlock_irqrestore(&sdos->lock, flags);
++#endif /* !BCMSPI_ANDROID */
+ }
+ 
+ /* Enable client interrupt */
+ void
+ spi_unlock(sdioh_info_t *sd)
+ {
++#ifndef BCMSPI_ANDROID
+ 	ulong flags;
+ 	struct sdos_info *sdos;
+ 
+@@ -318,13 +307,10 @@ spi_unlock(sdioh_info_t *sd)
+ 
+ 	spin_lock_irqsave(&sdos->lock, flags);
+ 	if (--sd->lockcount == 0 && sd->client_intr_enabled) {
+-#ifdef BCMSPI_ANDROID
+-		bcmsdh_oob_intr_set(1);
+-#else
+ 		spi_devintr_on(sd);
+-#endif /* BCMSPI_ANDROID */
+ 	}
+ 	spin_unlock_irqrestore(&sdos->lock, flags);
++#endif /* !BCMSPI_ANDROID */
+ }
+ 
+ #ifndef BCMSPI_ANDROID
+diff --git a/drivers/net/wireless/bcmdhd/bcmspibrcm.c b/drivers/net/wireless/bcmdhd/bcmspibrcm.c
+index d124131..d5f5754 100644
+--- a/drivers/net/wireless/bcmdhd/bcmspibrcm.c
++++ b/drivers/net/wireless/bcmdhd/bcmspibrcm.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmspibrcm.c 373329 2012-12-07 04:46:09Z $
++ * $Id: bcmspibrcm.c 355377 2012-09-06 13:25:35Z $
+  */
+ 
+ #define HSMODE
+@@ -94,9 +94,6 @@ uint8	spi_inbuf[SPI_MAX_PKT_LEN];
+ #define BUF2_PKT_LEN	128
+ uint8	spi_outbuf2[BUF2_PKT_LEN];
+ uint8	spi_inbuf2[BUF2_PKT_LEN];
+-#ifdef BCMSPI_ANDROID
+-uint *dhd_spi_lockcount = NULL;
+-#endif /* BCMSPI_ANDROID */
+ 
+ #if !(defined(SPI_PIO_RW_BIGENDIAN) && defined(SPI_PIO_32BIT_RW))
+ #define SPISWAP_WD4(x) bcmswap32(x);
+@@ -167,10 +164,6 @@ sdioh_attach(osl_t *osh, void *bar0, uint irq)
+ 	 */
+ 	sd->wordlen = 2;
+ 
+-#ifdef BCMSPI_ANDROID
+-	dhd_spi_lockcount = &sd->lockcount;
+-#endif /* BCMSPI_ANDROID */
+-
+ #ifndef BCMSPI_ANDROID
+ 	if (!spi_hw_attach(sd)) {
+ 		sd_err(("%s: spi_hw_attach() failed\n", __FUNCTION__));
+@@ -216,9 +209,6 @@ sdioh_detach(osl_t *osh, sdioh_info_t *sd)
+ 		spi_hw_detach(sd);
+ #endif /* !BCMSPI_ANDROID */
+ 		spi_osfree(sd);
+-#ifdef BCMSPI_ANDROID
+-		dhd_spi_lockcount = NULL;
+-#endif /* !BCMSPI_ANDROID */
+ 		MFREE(sd->osh, sd, sizeof(sdioh_info_t));
+ 	}
+ 	return SDIOH_API_RC_SUCCESS;
+@@ -228,24 +218,24 @@ sdioh_detach(osl_t *osh, sdioh_info_t *sd)
+ extern SDIOH_API_RC
+ sdioh_interrupt_register(sdioh_info_t *sd, sdioh_cb_fn_t fn, void *argh)
+ {
++#ifndef BCMSPI_ANDROID
+ 	sd_trace(("%s: Entering\n", __FUNCTION__));
+-#if !defined(OOB_INTR_ONLY)
+ 	sd->intr_handler = fn;
+ 	sd->intr_handler_arg = argh;
+ 	sd->intr_handler_valid = TRUE;
+-#endif /* !defined(OOB_INTR_ONLY) */
++#endif /* !BCMSPI_ANDROID */
+ 	return SDIOH_API_RC_SUCCESS;
+ }
+ 
+ extern SDIOH_API_RC
+ sdioh_interrupt_deregister(sdioh_info_t *sd)
+ {
++#ifndef BCMSPI_ANDROID
+ 	sd_trace(("%s: Entering\n", __FUNCTION__));
+-#if !defined(OOB_INTR_ONLY)
+ 	sd->intr_handler_valid = FALSE;
+ 	sd->intr_handler = NULL;
+ 	sd->intr_handler_arg = NULL;
+-#endif /* !defined(OOB_INTR_ONLY) */
++#endif /* !BCMSPI_ANDROID */
+ 	return SDIOH_API_RC_SUCCESS;
+ }
+ 
+diff --git a/drivers/net/wireless/bcmdhd/dhd.h b/drivers/net/wireless/bcmdhd/dhd.h
+index ce55c02..50aa745 100644
+--- a/drivers/net/wireless/bcmdhd/dhd.h
++++ b/drivers/net/wireless/bcmdhd/dhd.h
+@@ -58,6 +58,7 @@ int setScheduler(struct task_struct *p, int policy, struct sched_param *param);
+ #include <wlioctl.h>
+ #include <wlfc_proto.h>
+ 
++#include <dhd_sec_feature.h>
+ 
+ #if defined(CUSTOMER_HW4)
+ /* Customer requirement */
+diff --git a/drivers/net/wireless/bcmdhd/dhd_common.c b/drivers/net/wireless/bcmdhd/dhd_common.c
+index 23be721..c6ee8e2 100644
+--- a/drivers/net/wireless/bcmdhd/dhd_common.c
++++ b/drivers/net/wireless/bcmdhd/dhd_common.c
+@@ -677,7 +677,7 @@ dhd_ioctl(dhd_pub_t * dhd_pub, dhd_ioctl_t *ioc, void * buf, uint buflen)
+ 
+ 	case DHD_GET_VERSION:
+ 		if (buflen < sizeof(int))
+-			bcmerror = BCME_BUFTOOSHORT;
++			bcmerror = -BCME_BUFTOOSHORT;
+ 		else
+ 			*(int*)buf = DHD_IOCTL_VERSION;
+ 		break;
+@@ -1504,7 +1504,7 @@ dhd_aoe_arp_clr(dhd_pub_t *dhd, int idx)
+ 		idx = 0;
+ 
+ 	iov_len = bcm_mkiovar("arp_table_clear", 0, 0, iovbuf, sizeof(iovbuf));
+-	if ((ret  = dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf, iov_len, TRUE, idx)) < 0)
++	if ((ret  = dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf, iov_len, TRUE, idx) < 0))
+ 		DHD_ERROR(("%s failed code %d\n", __FUNCTION__, ret));
+ }
+ 
+@@ -1933,7 +1933,6 @@ dhd_pno_enable(dhd_pub_t *dhd, int pfn_enabled)
+ 		return ret;
+ 	}
+ 
+-#ifndef WL_SCHED_SCAN
+ 	if (!dhd_support_sta_mode(dhd))
+ 		return (ret);
+ 
+@@ -1943,7 +1942,6 @@ dhd_pno_enable(dhd_pub_t *dhd, int pfn_enabled)
+ 		DHD_ERROR(("%s pno is NOT enable : called in assoc mode , ignore\n", __FUNCTION__));
+ 		return ret;
+ 	}
+-#endif /* !WL_SCHED_SCAN */
+ 
+ 	/* Enable/disable PNO */
+ 	if ((ret = bcm_mkiovar("pfn", (char *)&pfn_enabled, 4, iovbuf, sizeof(iovbuf))) > 0) {
+@@ -1983,10 +1981,8 @@ dhd_pno_set(dhd_pub_t *dhd, wlc_ssid_t* ssids_local, int nssid, ushort scan_fr,
+ 		err = -1;
+ 		return err;
+ 	}
+-#ifndef WL_SCHED_SCAN
+ 	if (!dhd_support_sta_mode(dhd))
+ 		return err;
+-#endif /* !WL_SCHED_SCAN */
+ 
+ 	/* Check for broadcast ssid */
+ 	for (k = 0; k < nssid; k++) {
+diff --git a/drivers/net/wireless/bcmdhd/dhd_custom_sec.c b/drivers/net/wireless/bcmdhd/dhd_custom_sec.c
+index 1c16b0b..daa093e 100644
+--- a/drivers/net/wireless/bcmdhd/dhd_custom_sec.c
++++ b/drivers/net/wireless/bcmdhd/dhd_custom_sec.c
+@@ -70,11 +70,7 @@ const struct cntry_locales_custom translate_custom_table[] = {
+ 	{"ES", "ES", 1},
+ 	{"FI", "FI", 1},
+ 	{"FR", "FR", 1},
+-#ifdef BCM4335_CHIP
+-	{"GB", "GB", 6},
+-#else
+ 	{"GB", "GB", 1},
+-#endif
+ 	{"GR", "GR", 1},
+ 	{"HR", "HR", 1},
+ 	{"HU", "HU", 1},
+@@ -88,9 +84,7 @@ const struct cntry_locales_custom translate_custom_table[] = {
+ 	{"LT", "LT", 1},
+ 	{"LU", "LU", 1},
+ 	{"LV", "LV", 1},
+-#ifndef BCM4330_CHIP
+ 	{"MA", "MA", 1},
+-#endif
+ 	{"MT", "MT", 1},
+ 	{"MX", "MX", 1},
+ 	{"NL", "NL", 1},
+@@ -102,9 +96,8 @@ const struct cntry_locales_custom translate_custom_table[] = {
+ 	{"SE", "SE", 1},
+ 	{"SI", "SI", 1},
+ 	{"SK", "SK", 1},
+-#ifndef BCM4330_CHIP
+ 	{"TR", "TR", 7},
+-#endif
++	{"UA", "UA", 2},
+ 	{"TW", "TW", 2},
+ 	{"IR", "XZ", 11},	/* Universal if Country code is IRAN, (ISLAMIC REPUBLIC OF) */
+ 	{"SD", "XZ", 11},	/* Universal if Country code is SUDAN */
+@@ -117,48 +110,16 @@ const struct cntry_locales_custom translate_custom_table[] = {
+ #ifdef BCM4334_CHIP
+ 	{"RU", "RU", 13},
+ 	{"SG", "SG", 4},
+-	{"US", "US", 46},
+ 	{"UA", "UA", 8},
+-	{"CO", "CO", 4},
+-	{"ID", "ID", 1},
+-	{"LA", "LA", 1},
+-	{"LB", "LB", 2},
+-	{"VN", "VN", 4},
++	{"US", "US", 46}
+ #endif
+ #ifdef BCM4330_CHIP
+ 	{"RU", "RU", 13},
+-	{"US", "US", 5},
+ 	{"UA", "UY", 0},
+ 	{"AD", "AL", 0},
+-	{"CX", "AU", 2},
+-	{"GE", "GB", 1},
+-	{"ID", "MW", 0},
+-	{"KI", "AU", 2},
+-	{"NP", "SA", 0},
+-	{"WS", "SA", 0},
+-	{"LR", "BR", 0},
+-	{"ZM", "IN", 0},
+-	{"AN", "AG", 0},
+-	{"AI", "AS", 0},
+-	{"BM", "AS", 0},
+-	{"DZ", "IL", 0},
+-	{"LC", "AG", 0},
+-	{"MF", "BY", 0},
+-	{"GY", "CU", 0},
+-	{"LA", "GB", 1},
+-	{"LB", "BR", 0},
+-	{"MA", "IL", 0},
+-	{"MO", "BD", 0},
+-	{"MW", "BD", 0},
+-	{"QA", "BD", 0},
+-	{"TR", "GB", 1},
+-	{"TZ", "BF", 0},
+-	{"VN", "BR", 0},
+-	{"JO", "XZ", 1},
+-	{"PG", "XZ", 1},
+-	{"SA", "XZ", 1},
++	{"US", "US", 5}
++
+ #endif
+-	{"UA", "UA", 2}
+ };
+ 
+ /* Customized Locale convertor
+diff --git a/drivers/net/wireless/bcmdhd/dhd_linux.c b/drivers/net/wireless/bcmdhd/dhd_linux.c
+index 0cb2c49..594d151 100644
+--- a/drivers/net/wireless/bcmdhd/dhd_linux.c
++++ b/drivers/net/wireless/bcmdhd/dhd_linux.c
+@@ -22,7 +22,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: dhd_linux.c 373329 2012-12-07 04:46:09Z $
++ * $Id: dhd_linux.c 364074 2012-10-22 12:24:55Z $
+  */
+ 
+ #include <typedefs.h>
+@@ -134,6 +134,7 @@ static int dhd_device_event(struct notifier_block *this,
+ static struct notifier_block dhd_notifier = {
+ 	.notifier_call = dhd_device_event
+ };
++extern struct net_device_ops wl_cfgp2p_if_ops;
+ #endif /* ARP_OFFLOAD_SUPPORT */
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_PM_SLEEP)
+@@ -142,9 +143,9 @@ volatile bool dhd_mmc_suspend = FALSE;
+ DECLARE_WAIT_QUEUE_HEAD(dhd_dpc_wait);
+ #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_PM_SLEEP) */
+ 
+-#if defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID)
++#if defined(OOB_INTR_ONLY)
+ extern void dhd_enable_oob_intr(struct dhd_bus *bus, bool enable);
+-#endif /* defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID) */
++#endif /* defined(OOB_INTR_ONLY) */
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && (1)
+ static void dhd_hang_process(struct work_struct *work);
+ #endif 
+@@ -581,7 +582,8 @@ static int dhd_sleep_pm_callback(struct notifier_block *nfb, unsigned long actio
+ {
+ 	int ret = NOTIFY_DONE;
+ 
+-#if (LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 39))
++#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI) || (LINUX_VERSION_CODE <= \
++	KERNEL_VERSION(2, 6, 39))
+ 	switch (action) {
+ 	case PM_HIBERNATION_PREPARE:
+ 	case PM_SUSPEND_PREPARE:
+@@ -664,9 +666,7 @@ static int dhd_set_suspend(int value, dhd_pub_t *dhd)
+ 	int bcn_li_bcn;
+ #endif /* ENABLE_BCN_LI_BCN_WAKEUP */
+ #ifdef PASS_ALL_MCAST_PKTS
+-	struct dhd_info *dhdinfo = dhd->info;
+ 	uint32 allmulti;
+-	uint i;
+ #endif /* PASS_ALL_MCAST_PKTS */
+ 
+ 	DHD_TRACE(("%s: enter, value = %d in_suspend=%d\n",
+@@ -693,11 +693,7 @@ static int dhd_set_suspend(int value, dhd_pub_t *dhd)
+ 				allmulti = 0;
+ 				bcm_mkiovar("allmulti", (char *)&allmulti,
+ 					4, iovbuf, sizeof(iovbuf));
+-				for (i = 0; i < DHD_MAX_IFS; i++) {
+-					if (dhdinfo->iflist[i] && dhdinfo->iflist[i]->net)
+-						dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf,
+-							sizeof(iovbuf), TRUE, i);
+-				}
++				dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf, sizeof(iovbuf), TRUE, 0);
+ #endif /* PASS_ALL_MCAST_PKTS */
+ 
+ 				/* If DTIM skip is set up as default, force it to wake
+@@ -742,11 +738,7 @@ static int dhd_set_suspend(int value, dhd_pub_t *dhd)
+ 				allmulti = 1;
+ 				bcm_mkiovar("allmulti", (char *)&allmulti,
+ 					4, iovbuf, sizeof(iovbuf));
+-				for (i = 0; i < DHD_MAX_IFS; i++) {
+-					if (dhdinfo->iflist[i] && dhdinfo->iflist[i]->net)
+-						dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf,
+-							sizeof(iovbuf), TRUE, i);
+-				}
++				dhd_wl_ioctl_cmd(dhd, WLC_SET_VAR, iovbuf, sizeof(iovbuf), TRUE, 0);
+ #endif /* PASS_ALL_MCAST_PKTS */
+ 
+ 				/* restore pre-suspend setting for dtim_skip */
+@@ -977,13 +969,9 @@ _dhd_set_multicast_list(dhd_info_t *dhd, int ifidx)
+ 	for (i = 0; i < DHD_MAX_IFS; i++) {
+ 		if (dhd->iflist[i]) {
+ 			dev = dhd->iflist[i]->net;
+-			if (!dev)
+-				continue;
+ #else
+ 	ASSERT(dhd && dhd->iflist[ifidx]);
+ 	dev = dhd->iflist[ifidx]->net;
+-	if (!dev)
+-		return;
+ #endif /* MCAST_LIST_ACCUMULATION */
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
+ 	netif_addr_lock_bh(dev);
+@@ -1539,7 +1527,7 @@ dhd_sendpkt(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
+ 	dhd_htsf_addtxts(dhdp, pktbuf);
+ #endif
+ #ifdef PROP_TXSTATUS
+-	dhd_os_wlfc_block(dhdp);
++	dhd_os_wlfc_block(dhdp); 
+ 	if (dhdp->wlfc_state && ((athost_wl_status_info_t*)dhdp->wlfc_state)->proptxstatus_mode
+ 		!= WLFC_FCMODE_NONE) {
+ 		ret = dhd_wlfc_enque_sendq(dhdp->wlfc_state, DHD_PKTTAG_FIFO(PKTTAG(pktbuf)),
+@@ -2952,15 +2940,6 @@ int dhd_do_driver_init(struct net_device *net)
+ 		return -EINVAL;
+ 	}
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25))
+-#ifdef MULTIPLE_SUPPLICANT
+-	if (mutex_is_locked(&_dhd_sdio_mutex_lock_) != 0) {
+-		DHD_ERROR(("%s : dhdsdio_probe is already running!\n", __FUNCTION__));
+-		return 0;
+-	}
+-#endif /* MULTIPLE_SUPPLICANT */
+-#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25) */
+-
+ 	dhd = *(dhd_info_t **)netdev_priv(net);
+ 
+ 	/* If driver is already initialized, do nothing
+@@ -3258,7 +3237,7 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
+ 		dhd->threads_only = FALSE;
+ 	}
+ 
+-	if (dhd_watchdog_prio >= 0) {
++	if (dhd_dpc_prio >= 0) {
+ 		/* Initialize watchdog thread */
+ #ifdef USE_KTHREAD_API
+ 		PROC_START2(dhd_watchdog_thread, dhd, &dhd->thr_wdt_ctl, 0, "dhd_watchdog_thread");
+@@ -3414,8 +3393,10 @@ dhd_bus_start(dhd_pub_t *dhdp)
+ 		return -ENODEV;
+ 	}
+ 
++#ifndef BCMSPI_ANDROID
+ 	/* Enable oob at firmware */
+ 	dhd_enable_oob_intr(dhd->pub.bus, TRUE);
++#endif /* !BCMSPI_ANDROID */
+ #endif /* defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID) */
+ 
+ 	/* If bus is not ready, can't come up */
+@@ -4181,11 +4162,6 @@ aoe_update_host_ipv4_table(dhd_pub_t *dhd_pub, u32 ipa, bool add, int idx)
+ #endif
+ }
+ 
+-/*
+- * Notification mechanism from kernel to our driver. This function is called by the Linux kernel
+- * whenever there is an event related to an IP address.
+- * ptr : kernel provided pointer to IP address that has changed
+- */
+ static int dhd_device_event(struct notifier_block *this,
+ 	unsigned long event,
+ 	void *ptr)
+@@ -4200,18 +4176,15 @@ static int dhd_device_event(struct notifier_block *this,
+ 		return NOTIFY_DONE;
+ 	if (!ifa || !(ifa->ifa_dev->dev))
+ 		return NOTIFY_DONE;
+-
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 31))
+-	/* Filter notifications meant for non Broadcom devices */
+ 	if ((ifa->ifa_dev->dev->netdev_ops != &dhd_ops_pri) &&
+-	    (ifa->ifa_dev->dev->netdev_ops != &dhd_ops_virt)) {
++		(ifa->ifa_dev->dev->netdev_ops != &dhd_ops_virt)
+ #ifdef WLP2P
+-		if (!wl_cfgp2p_is_ifops(ifa->ifa_dev->dev->netdev_ops))
++		&& (ifa->ifa_dev->dev->netdev_ops != &wl_cfgp2p_if_ops)
+ #endif
++		)
+ 		return NOTIFY_DONE;
+-	}
+-#endif /* LINUX_VERSION_CODE */
+-
++#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 31)) */
+ 	dhd = *(dhd_info_t **)netdev_priv(ifa->ifa_dev->dev);
+ 	if (!dhd)
+ 		return NOTIFY_DONE;
+diff --git a/drivers/net/wireless/bcmdhd/dhd_sdio.c b/drivers/net/wireless/bcmdhd/dhd_sdio.c
+index cffe312..da96ec0 100644
+--- a/drivers/net/wireless/bcmdhd/dhd_sdio.c
++++ b/drivers/net/wireless/bcmdhd/dhd_sdio.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: dhd_sdio.c 373329 2012-12-07 04:46:09Z $
++ * $Id: dhd_sdio.c 363280 2012-10-17 00:53:50Z $
+  */
+ 
+ #include <typedefs.h>
+@@ -388,10 +388,6 @@ static int tx_packets[NUMPRIO];
+ const uint dhd_deferred_tx = 1;
+ 
+ extern uint dhd_watchdog_ms;
+-#ifdef BCMSPI_ANDROID
+-extern uint *dhd_spi_lockcount;
+-#endif /* BCMSPI_ANDROID */
+-
+ extern void dhd_os_wd_timer(void *bus, uint wdtick);
+ 
+ /* Tx/Rx bounds */
+@@ -1077,8 +1073,6 @@ dhdsdio_clk_devsleep_iovar(dhd_bus_t *bus, bool on)
+ 		bus->kso = on ? FALSE : TRUE;
+ 	else {
+ 		DHD_ERROR(("%s: Sleep request failed: on:%d err:%d\n", __FUNCTION__, on, err));
+-		if (!on && retry > 2)
+-			bus->kso = TRUE;
+ 	}
+ 
+ 	return err;
+@@ -1538,14 +1532,12 @@ dhdsdio_func_blocksize(dhd_pub_t *dhd, int function_num, int block_size)
+ }
+ #endif /* CUSTOMER_HW4 && USE_DYNAMIC_F2_BLKSIZE */
+ 
+-#if defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID)
++#if defined(OOB_INTR_ONLY)
+ void
+ dhd_enable_oob_intr(struct dhd_bus *bus, bool enable)
+ {
+ #if defined(HW_OOB)
+ 	bcmsdh_enable_hw_oob_intr(bus->sdh, enable);
+-#elif defined(BCMSPI_ANDROID)
+-	bcmsdh_intr_enable(bus->sdh);
+ #else
+ 	sdpcmd_regs_t *regs = bus->regs;
+ 	uint retries = 0;
+@@ -1569,7 +1561,7 @@ dhd_enable_oob_intr(struct dhd_bus *bus, bool enable)
+ 	dhdsdio_clkctl(bus, CLK_SDONLY, FALSE);
+ #endif /* !defined(HW_OOB) */
+ }
+-#endif /* defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID) */
++#endif /* defined(OOB_INTR_ONLY) */
+ 
+ /* Writes a HW/SW header into the packet and sends it. */
+ /* Assumes: (a) header space already there, (b) caller holds lock */
+@@ -4388,9 +4380,7 @@ dhd_bus_init(dhd_pub_t *dhdp, bool enforce_mutex)
+ 		bus->intdis = FALSE;
+ 		if (bus->intr) {
+ 			DHD_INTR(("%s: enable SDIO device interrupts\n", __FUNCTION__));
+-#ifndef BCMSPI_ANDROID
+ 			bcmsdh_intr_enable(bus->sdh);
+-#endif /* !BCMSPI_ANDROID */
+ 		} else {
+ 			DHD_INTR(("%s: disable SDIO interrupts\n", __FUNCTION__));
+ 			bcmsdh_intr_disable(bus->sdh);
+@@ -6028,14 +6018,10 @@ clkwait:
+ 		DHD_INTR(("%s: enable SDIO interrupts, rxdone %d framecnt %d\n",
+ 		          __FUNCTION__, rxdone, framecnt));
+ 		bus->intdis = FALSE;
+-#if defined(OOB_INTR_ONLY)
++#if defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID)
+ 	bcmsdh_oob_intr_set(1);
+-#endif /* defined(OOB_INTR_ONLY) */
++#endif /* defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID) */
+ 		bcmsdh_intr_enable(sdh);
+-#ifdef BCMSPI_ANDROID
+-		if (*dhd_spi_lockcount == 0)
+-			bcmsdh_oob_intr_set(1);
+-#endif /* BCMSPI_ANDROID */
+ 	}
+ 
+ #if defined(OOB_INTR_ONLY) && !defined(HW_OOB)
+@@ -6204,9 +6190,6 @@ dhdsdio_isr(void *arg)
+ 		DHD_ERROR(("dhdsdio_isr() w/o interrupt configured!\n"));
+ 	}
+ 
+-#ifdef BCMSPI_ANDROID
+-	bcmsdh_oob_intr_set(0);
+-#endif /* BCMSPI_ANDROID */
+ 	bcmsdh_intr_disable(sdh);
+ 	bus->intdis = TRUE;
+ 
+@@ -7967,7 +7950,9 @@ dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
+ 					if (bcmerror == BCME_OK) {
+ #if defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID)
+ 						bcmsdh_set_irq(TRUE);
++#ifndef BCMSPI_ANDROID
+ 						dhd_enable_oob_intr(bus, TRUE);
++#endif /* !BCMSPI_ANDROID */
+ #endif /* defined(OOB_INTR_ONLY) || defined(BCMSPI_ANDROID) */
+ 
+ 						bus->dhd->dongle_reset = FALSE;
+diff --git a/drivers/net/wireless/bcmdhd/dhd_sec_feature.h b/drivers/net/wireless/bcmdhd/dhd_sec_feature.h
+index 15ee736..e995dbd 100644
+--- a/drivers/net/wireless/bcmdhd/dhd_sec_feature.h
++++ b/drivers/net/wireless/bcmdhd/dhd_sec_feature.h
+@@ -75,14 +75,6 @@
+ #endif
+ #endif
+ 
+-#if defined(CONFIG_TARGET_SERIES_Q1)\
+-	&& defined(CONFIG_JPN_OPERATOR_NTT)
+-#undef READ_MACADDR
+-#undef RDWR_MACADDR
+-#define WRITE_MACADDR
+-#define USE_CID_CHECK
+-#endif
+-
+ #ifdef CONFIG_ARCH_MSM7X30
+ #define HW_OOB
+ #define READ_MACADDR
+diff --git a/drivers/net/wireless/bcmdhd/include/bcmsdh_sdmmc.h b/drivers/net/wireless/bcmdhd/include/bcmsdh_sdmmc.h
+index b249148..8417842 100644
+--- a/drivers/net/wireless/bcmdhd/include/bcmsdh_sdmmc.h
++++ b/drivers/net/wireless/bcmdhd/include/bcmsdh_sdmmc.h
+@@ -21,13 +21,13 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmsdh_sdmmc.h 366811 2012-11-05 13:49:17Z $
++ * $Id: bcmsdh_sdmmc.h 362840 2012-10-15 02:15:23Z $
+  */
+ 
+ #ifndef __BCMSDH_SDMMC_H__
+ #define __BCMSDH_SDMMC_H__
+ 
+-#define sd_err(x)
++#define sd_err(x) do {printf x;} while (0)
+ #define sd_trace(x)
+ #define sd_info(x)
+ #define sd_debug(x)
+@@ -35,8 +35,6 @@
+ #define sd_ctrl(x)
+ 
+ #ifdef CUSTOMER_HW4
+-#undef sd_err
+-#define sd_err(x) do {printf x;} while (0)
+ #define sd_trace_hw4	sd_err
+ #else
+ #define sd_trace_hw4	sd_trace
+diff --git a/drivers/net/wireless/bcmdhd/include/bcmspibrcm.h b/drivers/net/wireless/bcmdhd/include/bcmspibrcm.h
+index 6452be4..2203b0d 100644
+--- a/drivers/net/wireless/bcmdhd/include/bcmspibrcm.h
++++ b/drivers/net/wireless/bcmdhd/include/bcmspibrcm.h
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: bcmspibrcm.h 373329 2012-12-07 04:46:09Z $
++ * $Id: bcmspibrcm.h 354176 2012-08-30 07:34:33Z $
+  */
+ #ifndef	_BCM_SPI_BRCM_H
+ #define	_BCM_SPI_BRCM_H
+@@ -80,15 +80,19 @@ struct sdioh_info {
+ #endif /* !BCMSPI_ANDROID */
+ 	osl_t		*osh;			/* osh handler */
+ 	void		*controller;	/* Pointer to SPI Controller's private data struct */
++#ifndef BCMSPI_ANDROID
+ 	uint		lockcount;		/* nest count of spi_lock() calls */
+ 	bool		client_intr_enabled;	/* interrupt connnected flag */
+ 	bool		intr_handler_valid;	/* client driver interrupt handler valid */
+ 	sdioh_cb_fn_t	intr_handler;		/* registered interrupt handler */
+ 	void		*intr_handler_arg;	/* argument to call interrupt handler */
++#endif /* !BCMSPI_ANDROID */
+ 	bool		initialized;		/* card initialized */
+ 	uint32		target_dev;		/* Target device ID */
+ 	uint32		intmask;		/* Current active interrupts */
++#ifndef BCMSPI_ANDROID
+ 	void		*sdos_info;		/* Pointer to per-OS private data */
++#endif /* !BCMSPI_ANDROID */
+ 	uint32		controller_type;	/* Host controller type */
+ 	uint8		version;		/* Host Controller Spec Compliance Version */
+ 	uint		irq;			/* Client irq */
+diff --git a/drivers/net/wireless/bcmdhd/include/epivers.h b/drivers/net/wireless/bcmdhd/include/epivers.h
+index 6ccb9c1..b851b61 100644
+--- a/drivers/net/wireless/bcmdhd/include/epivers.h
++++ b/drivers/net/wireless/bcmdhd/include/epivers.h
+@@ -32,24 +32,24 @@
+ 
+ #define	EPI_RC_NUMBER		19
+ 
+-#define	EPI_INCREMENTAL_NUMBER	9
++#define	EPI_INCREMENTAL_NUMBER	4
+ 
+ #define	EPI_BUILD_NUMBER	0
+ 
+-#define	EPI_VERSION		1, 28, 19, 9
++#define	EPI_VERSION		1, 28, 19, 4
+ 
+-#define	EPI_VERSION_NUM		0x011c1309
++#define	EPI_VERSION_NUM		0x011c1304
+ 
+ #define EPI_VERSION_DEV		1.28.19
+ 
+ /* Driver Version String, ASCII, 32 chars max */
+ #ifdef BCMINTERNAL
+-#define	EPI_VERSION_STR		"1.28.19.9 (r BCMINT)"
++#define	EPI_VERSION_STR		"1.28.19.4 (r BCMINT)"
+ #else
+ #ifdef WLTEST
+-#define	EPI_VERSION_STR		"1.28.19.9 (r WLTEST)"
++#define	EPI_VERSION_STR		"1.28.19.4 (r WLTEST)"
+ #else
+-#define	EPI_VERSION_STR		"1.28.19.9 (RC1_0107)"
++#define	EPI_VERSION_STR		"1.28.19.4 (RC3_1203)"
+ #endif
+ #endif /* BCMINTERNAL */
+ 
+diff --git a/drivers/net/wireless/bcmdhd/include/proto/wpa.h b/drivers/net/wireless/bcmdhd/include/proto/wpa.h
+index ba63e02..47bc354 100644
+--- a/drivers/net/wireless/bcmdhd/include/proto/wpa.h
++++ b/drivers/net/wireless/bcmdhd/include/proto/wpa.h
+@@ -34,7 +34,7 @@
+ 
+ #include <packed_section_start.h>
+ 
+-
++#include <dhd_sec_feature.h>
+ 
+ 
+ #define DOT11_RC_INVALID_WPA_IE		13	
+diff --git a/drivers/net/wireless/bcmdhd/include/wlioctl.h b/drivers/net/wireless/bcmdhd/include/wlioctl.h
+index 5d38763..137f0cc 100644
+--- a/drivers/net/wireless/bcmdhd/include/wlioctl.h
++++ b/drivers/net/wireless/bcmdhd/include/wlioctl.h
+@@ -43,6 +43,8 @@
+ #include <bcmcdc.h>
+ #endif /* LINUX_POSTMOGRIFY_REMOVAL */
+ 
++#include <dhd_sec_feature.h>
++
+ /*  LINUX_POSTMOGRIFY_REMOVAL: undefined during compile phase, so its
+  *  a no-op for most cases. For hybrid and other open source releases,
+  *  its defined during a second pass and mogrified out for distribution.
+@@ -879,14 +881,14 @@ typedef enum sup_auth_status {
+ #define CRYPTO_ALGO_AES_CCM		4
+ #define CRYPTO_ALGO_AES_OCB_MSDU	5
+ #define CRYPTO_ALGO_AES_OCB_MPDU	6
+-#if !defined(BCMCCX) && !defined(BCMEXTCCX)
++#if !defined(BCMCCX)
+ #define CRYPTO_ALGO_NALG		7
+ #else
+ #define CRYPTO_ALGO_CKIP		7
+ #define CRYPTO_ALGO_CKIP_MMH		8
+ #define CRYPTO_ALGO_WEP_MMH		9
+ #define CRYPTO_ALGO_NALG		10
+-#endif /* !BCMCCX && !BCMEXTCCX */
++#endif 
+ #ifdef BCMWAPI_WPI
+ #define CRYPTO_ALGO_SMS4		11
+ #endif /* BCMWAPI_WPI */
+@@ -901,13 +903,13 @@ typedef enum sup_auth_status {
+ 
+ #define WL_SOFT_KEY	(1 << 0)	/* Indicates this key is using soft encrypt */
+ #define WL_PRIMARY_KEY	(1 << 1)	/* Indicates this key is the primary (ie tx) key */
+-#if defined(BCMCCX) || defined(BCMEXTCCX)
++#if defined(BCMCCX)
+ #define WL_CKIP_KP	(1 << 4)	/* CMIC */
+ #define WL_CKIP_MMH	(1 << 5)	/* CKIP */
+ #else
+ #define WL_KF_RES_4	(1 << 4)	/* Reserved for backward compat */
+ #define WL_KF_RES_5	(1 << 5)	/* Reserved for backward compat */
+-#endif /* BCMCCX || BCMEXTCCX */
++#endif 
+ #define WL_IBSS_PEER_GROUP_KEY	(1 << 6)	/* Indicates a group key for a IBSS PEER */
+ 
+ typedef struct wl_wsec_key {
+@@ -999,10 +1001,10 @@ typedef struct {
+ #define WPA_AUTH_NONE		0x0001	/* none (IBSS) */
+ #define WPA_AUTH_UNSPECIFIED	0x0002	/* over 802.1x */
+ #define WPA_AUTH_PSK		0x0004	/* Pre-shared key */
+-#if defined(BCMCCX) || defined(BCMEXTCCX)
++#if defined(BCMCCX)
+ #define WPA_AUTH_CCKM		0x0008	/* CCKM */
+ #define WPA2_AUTH_CCKM		0x0010	/* CCKM2 */
+-#endif	/* BCMCCX || BCMEXTCCX */
++#endif	
+ /* #define WPA_AUTH_8021X 0x0020 */	/* 802.1x, reserved */
+ #define WPA2_AUTH_UNSPECIFIED	0x0040	/* over 802.1x */
+ #define WPA2_AUTH_PSK		0x0080	/* Pre-shared key */
+diff --git a/drivers/net/wireless/bcmdhd/linux_osl.c b/drivers/net/wireless/bcmdhd/linux_osl.c
+index 6444adc..7f37096 100644
+--- a/drivers/net/wireless/bcmdhd/linux_osl.c
++++ b/drivers/net/wireless/bcmdhd/linux_osl.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: linux_osl.c 372888 2012-12-05 06:56:47Z $
++ * $Id: linux_osl.c 361207 2012-10-06 05:59:08Z $
+  */
+ 
+ #define LINUX_PORT
+@@ -35,6 +35,10 @@
+ #include <linux/delay.h>
+ #include <pcicfg.h>
+ 
++#ifdef BCMASSERT_LOG
++#include <bcm_assert_log.h>
++#endif
++
+ 
+ #include <linux/fs.h>
+ 
+@@ -185,8 +189,7 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
+ {
+ 	osl_t *osh;
+ 
+-	if (!(osh = kmalloc(sizeof(osl_t), GFP_ATOMIC)))
+-		return osh;
++	osh = kmalloc(sizeof(osl_t), GFP_ATOMIC);
+ 
+ 	ASSERT(osh);
+ 
+@@ -994,10 +997,12 @@ osl_assert(const char *exp, const char *file, int line)
+ 	if (!basename)
+ 		basename = file;
+ 
++#ifdef BCMASSERT_LOG
+ 	snprintf(tempbuf, 64, "\"%s\": file \"%s\", line %d\n",
+ 		exp, basename, line);
+ 
+-	printk("%s", tempbuf);
++	bcm_assert_log(tempbuf);
++#endif 
+ 
+ 
+ }
+diff --git a/drivers/net/wireless/bcmdhd/wl_android.c b/drivers/net/wireless/bcmdhd/wl_android.c
+index 1161b7d..531a399 100644
+--- a/drivers/net/wireless/bcmdhd/wl_android.c
++++ b/drivers/net/wireless/bcmdhd/wl_android.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: wl_android.c 372067 2012-11-30 08:03:06Z $
++ * $Id: wl_android.c 363784 2012-10-19 06:44:03Z $
+  */
+ 
+ #include <linux/module.h>
+@@ -1046,7 +1046,7 @@ int wl_android_set_okc_mode(struct net_device *dev, char *command, int total_len
+ }
+ #endif /* WES_SUPPORT */
+ 
+-#if defined(PNO_SUPPORT) && !defined(WL_SCHED_SCAN)
++#if defined(PNO_SUPPORT)
+ static int wl_android_set_pno_setup(struct net_device *dev, char *command, int total_len)
+ {
+ 	wlc_ssid_t ssids_local[MAX_PFN_LIST_COUNT];
+@@ -1153,7 +1153,7 @@ static int wl_android_set_pno_setup(struct net_device *dev, char *command, int t
+ exit_proc:
+ 	return res;
+ }
+-#endif /* PNO_SUPPORT && !WL_SCHED_SCAN */
++#endif 
+ 
+ static int wl_android_get_p2p_dev_addr(struct net_device *ndev, char *command, int total_len)
+ {
+@@ -1769,6 +1769,7 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
+ 		strlen(CMD_COUNTRYREV_SET)) == 0) {
+ 		bytes_written = wl_android_set_country_rev(net, command,
+ 		priv_cmd.total_len);
++		wl_update_wiphybands(NULL);
+ 	} else if (strnicmp(command, CMD_COUNTRYREV_GET,
+ 		strlen(CMD_COUNTRYREV_GET)) == 0) {
+ 		bytes_written = wl_android_get_country_rev(net, command,
+@@ -1833,7 +1834,7 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
+ 		bytes_written = wl_android_set_okc_mode(net, command, priv_cmd.total_len);
+ 	}
+ #endif /* WES_SUPPORT */
+-#if defined(PNO_SUPPORT) && !defined(WL_SCHED_SCAN)
++#if defined(PNO_SUPPORT)
+ 	else if (strnicmp(command, CMD_PNOSSIDCLR_SET, strlen(CMD_PNOSSIDCLR_SET)) == 0) {
+ 		bytes_written = dhd_dev_pno_reset(net);
+ 	}
+@@ -1844,7 +1845,7 @@ int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd)
+ 		uint pfn_enabled = *(command + strlen(CMD_PNOENABLE_SET) + 1) - '0';
+ 		bytes_written = dhd_dev_pno_enable(net, pfn_enabled);
+ 	}
+-#endif /* PNO_SUPPORT && !WL_SCHED_SCAN */
++#endif 
+ 	else if (strnicmp(command, CMD_P2P_DEV_ADDR, strlen(CMD_P2P_DEV_ADDR)) == 0) {
+ 		bytes_written = wl_android_get_p2p_dev_addr(net, command, priv_cmd.total_len);
+ 	}
+@@ -2303,6 +2304,10 @@ static int wifi_remove(struct platform_device *pdev)
+ static int wifi_suspend(struct platform_device *pdev, pm_message_t state)
+ {
+ 	DHD_TRACE(("##> %s\n", __FUNCTION__));
++#if defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI)
++	if (dhd_os_check_wakelock(bcmsdh_get_drvdata()))
++		return -EBUSY;
++#endif /* defined(CONFIG_ARCH_RHEA) || defined(CONFIG_ARCH_CAPRI) */
+ #if (LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 39)) && defined(OOB_INTR_ONLY) && 1
+ 	bcmsdh_oob_intr_set(0);
+ #endif /* (OOB_INTR_ONLY) */
+diff --git a/drivers/net/wireless/bcmdhd/wl_cfg80211.h b/drivers/net/wireless/bcmdhd/wl_cfg80211.h
+index 0a7720c..90df8df 100644
+--- a/drivers/net/wireless/bcmdhd/wl_cfg80211.h
++++ b/drivers/net/wireless/bcmdhd/wl_cfg80211.h
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: wl_cfg80211.h 366811 2012-11-05 13:49:17Z $
++ * $Id: wl_cfg80211.h 363350 2012-10-17 08:29:23Z $
+  */
+ 
+ #ifndef _wl_cfg80211_h_
+@@ -62,12 +62,6 @@ struct wl_ibss;
+ /* 0 invalidates all debug messages.  default is 1 */
+ #define WL_DBG_LEVEL 0xFF
+ 
+-#ifdef CUSTOMER_HW4
+-#define CFG80211_ERROR_TEXT		"CFG80211-INFO2) "
+-#else
+-#define CFG80211_ERROR_TEXT		"CFG80211-ERROR) "
+-#endif
+-
+ #if defined(DHD_DEBUG)
+ #define	WL_ERR(args)									\
+ do {										\
+@@ -141,7 +135,8 @@ do {									\
+ #else				/* !(WL_DBG_LEVEL > 0) */
+ #define	WL_DBG(args)
+ #endif				/* (WL_DBG_LEVEL > 0) */
+-#define	WL_PNO(args)
++#define WL_PNO(x)
++
+ 
+ #define WL_SCAN_RETRY_MAX	3
+ #define WL_NUM_PMKIDS_MAX	MAXPMKID
+@@ -589,9 +584,6 @@ struct wl_priv {
+ 	u32 iw_ie_len;
+ #endif /* WL11U */
+ 	bool sched_scan_running;	/* scheduled scan req status */
+-#ifdef WL_SCHED_SCAN
+-	struct cfg80211_sched_scan_request *sched_scan_req;	/* scheduled scan req */
+-#endif /* WL_SCHED_SCAN */
+ #ifdef WL_HOST_BAND_MGMT
+ 	u8 curr_band;
+ #endif /* WL_HOST_BAND_MGMT */
+diff --git a/drivers/net/wireless/bcmdhd/wl_cfgp2p.c b/drivers/net/wireless/bcmdhd/wl_cfgp2p.c
+index 64eb5f0..f1c4482 100644
+--- a/drivers/net/wireless/bcmdhd/wl_cfgp2p.c
++++ b/drivers/net/wireless/bcmdhd/wl_cfgp2p.c
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: wl_cfgp2p.c 371797 2012-11-29 11:19:45Z $
++ * $Id: wl_cfgp2p.c 363164 2012-10-16 11:12:13Z $
+  *
+  */
+ #include <typedefs.h>
+@@ -63,7 +63,7 @@ static int wl_cfgp2p_if_stop(struct net_device *net);
+ static s32 wl_cfgp2p_cancel_listen(struct wl_priv *wl, struct net_device *ndev,
+ 	bool notify);
+ 
+-static const struct net_device_ops wl_cfgp2p_if_ops = {
++struct net_device_ops wl_cfgp2p_if_ops = {
+ 	.ndo_open		= wl_cfgp2p_if_open,
+ 	.ndo_stop		= wl_cfgp2p_if_stop,
+ 	.ndo_do_ioctl		= wl_cfgp2p_do_ioctl,
+@@ -2077,11 +2077,6 @@ wl_cfgp2p_set_p2p_ps(struct wl_priv *wl, struct net_device *ndev, char* buf, int
+ 		}
+ 
+ 		if ((legacy_ps != -1) && ((legacy_ps == PM_MAX) || (legacy_ps == PM_OFF))) {
+-#if !defined(SUPPORT_PM2_ONLY)
+-			if (legacy_ps == PM_MAX)
+-				legacy_ps = PM_FAST;
+-#endif /* SUPPORT_PM2_ONLY */
+-
+ 			ret = wldev_ioctl(wl_to_p2p_bss_ndev(wl, P2PAPI_BSSCFG_CONNECTION),
+ 				WLC_SET_PM, &legacy_ps, sizeof(legacy_ps), true);
+ 			if (unlikely(ret)) {
+@@ -2208,25 +2203,13 @@ wl_cfgp2p_register_ndev(struct wl_priv *wl)
+ {
+ 	int ret = 0;
+ 	struct net_device* net = NULL;
+-	struct wireless_dev *wdev = NULL;
++	struct wireless_dev *wdev;
+ 	uint8 temp_addr[ETHER_ADDR_LEN] = { 0x00, 0x90, 0x4c, 0x33, 0x22, 0x11 };
+ 
+-	if (wl->p2p_net) {
+-		CFGP2P_ERR(("p2p_net defined already.\n"));
+-		return -EINVAL;
+-	}
+-
+ 	/* Allocate etherdev, including space for private structure */
+ 	if (!(net = alloc_etherdev(sizeof(struct wl_priv *)))) {
+ 		CFGP2P_ERR(("%s: OOM - alloc_etherdev\n", __FUNCTION__));
+-		return -ENODEV;
+-	}
+-
+-	wdev = kzalloc(sizeof(*wdev), GFP_KERNEL);
+-	if (unlikely(!wdev)) {
+-		WL_ERR(("Could not allocate wireless device\n"));
+-		free_netdev(net);
+-		return -ENOMEM;
++		goto fail;
+ 	}
+ 
+ 	strncpy(net->name, "p2p%d", sizeof(net->name) - 1);
+@@ -2249,6 +2232,12 @@ wl_cfgp2p_register_ndev(struct wl_priv *wl)
+ 	/* Register with a dummy MAC addr */
+ 	memcpy(net->dev_addr, temp_addr, ETHER_ADDR_LEN);
+ 
++	wdev = kzalloc(sizeof(*wdev), GFP_KERNEL);
++	if (unlikely(!wdev)) {
++		WL_ERR(("Could not allocate wireless device\n"));
++		return -ENOMEM;
++	}
++
+ 	wdev->wiphy = wl->wdev->wiphy;
+ 
+ 	wdev->iftype = wl_mode_to_nl80211_iftype(WL_MODE_BSS);
+@@ -2264,23 +2253,40 @@ wl_cfgp2p_register_ndev(struct wl_priv *wl)
+ 	/* Associate p2p0 network interface with new wdev */
+ 	wdev->netdev = net;
+ 
+-	ret = register_netdev(net);
+-	if (ret) {
+-		CFGP2P_ERR((" register_netdevice failed (%d)\n", ret));
+-		free_netdev(net);
+-		kfree(wdev);
+-		return -ENODEV;
+-	}
+-
+ 	/* store p2p net ptr for further reference. Note that iflist won't have this
+ 	 * entry as there corresponding firmware interface is a "Hidden" interface.
+ 	 */
++	if (wl->p2p_net) {
++		CFGP2P_ERR(("p2p_net defined already.\n"));
++		return -EINVAL;
++	} else {
+ 		wl->p2p_wdev = wdev;
+ 		wl->p2p_net = net;
++	}
++
++	ret = register_netdev(net);
++	if (ret) {
++		CFGP2P_ERR((" register_netdevice failed (%d)\n", ret));
++		goto fail;
++	}
+ 
+ 	printk("%s: P2P Interface Registered\n", net->name);
+ 
+ 	return ret;
++fail:
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31)
++	net->open = NULL;
++#else
++	net->netdev_ops = NULL;
++#endif
++
++	if (net) {
++		unregister_netdev(net);
++		free_netdev(net);
++	}
++
++	return -ENODEV;
+ }
+ 
+ s32
+@@ -2299,13 +2305,12 @@ wl_cfgp2p_unregister_ndev(struct wl_priv *wl)
+ }
+ static int wl_cfgp2p_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+ {
+-  if(skb)
+-  {
+-		CFGP2P_DBG(("(%s) is not used for data operations.Droping the packet.\n",
+-			ndev->name));
++	CFGP2P_DBG(("(%s) is not used for data operations. Droping the packet. \n", ndev->name));
++    if(skb)
++    {
++        printk("%s : %s skb free call.\n",__FUNCTION__,ndev->name);
+         dev_kfree_skb_any(skb);
+-  }
+-
++    }
+ 	return 0;
+ }
+ 
+@@ -2381,8 +2386,3 @@ static int wl_cfgp2p_if_stop(struct net_device *net)
+ 					BIT(NL80211_IFTYPE_P2P_GO)));
+ 	return 0;
+ }
+-
+-bool wl_cfgp2p_is_ifops(const struct net_device_ops *if_ops)
+-{
+-	return (if_ops == &wl_cfgp2p_if_ops);
+-}
+diff --git a/drivers/net/wireless/bcmdhd/wl_cfgp2p.h b/drivers/net/wireless/bcmdhd/wl_cfgp2p.h
+index e62acd0..ee34db5 100644
+--- a/drivers/net/wireless/bcmdhd/wl_cfgp2p.h
++++ b/drivers/net/wireless/bcmdhd/wl_cfgp2p.h
+@@ -21,7 +21,7 @@
+  * software in any way with any other Broadcom software provided under a license
+  * other than the GPL, without Broadcom's express prior written consent.
+  *
+- * $Id: wl_cfgp2p.h 368090 2012-11-12 04:28:13Z $
++ * $Id: wl_cfgp2p.h 363350 2012-10-17 08:29:23Z $
+  */
+ #ifndef _wl_cfgp2p_h_
+ #define _wl_cfgp2p_h_
+@@ -135,13 +135,6 @@ enum wl_cfgp2p_status {
+ /* dword align allocation */
+ #define WLC_IOCTL_MAXLEN 8192
+ 
+-#ifdef CUSTOMER_HW4
+-#define CFGP2P_ERROR_TEXT		"CFGP2P-INFO2) "
+-#else
+-#define CFGP2P_ERROR_TEXT		"CFGP2P-ERROR) "
+-#endif
+-
+-
+ #define CFGP2P_ERR(args)									\
+ 	do {										\
+ 		if (wl_dbg_level & WL_DBG_ERR) {				\
+@@ -305,9 +298,6 @@ wl_cfgp2p_register_ndev(struct wl_priv *wl);
+ extern s32
+ wl_cfgp2p_unregister_ndev(struct wl_priv *wl);
+ 
+-extern bool
+-wl_cfgp2p_is_ifops(const struct net_device_ops *if_ops);
+-
+ /* WiFi Direct */
+ #define SOCIAL_CHAN_1 1
+ #define SOCIAL_CHAN_2 6
+-- 
+1.8.5.2
