@@ -1,0 +1,18 @@
+B2_ModulePatch-kerel
+====================
+
+This is KERNEL patch for GS2 HD LTE B2 board. Samsung revisioned their's board so newer board can't use Wifi in ROM.
+
+How to PATCH?..
+===============
+type this :
+	(From Kernel directory)
+	patch -p1 *.patch
+	(eg: cd /home/Path/to/kernel/msm8660-common && patch -p1 Patchfilename.patch)
+	
+Now?...
+=======
+After patching this kernel, you have to modify your system.
+First, get system/etc/wifi folder from SamsungROM and paste in to ROM which you built..(eg:CM/Dokdo/PAC..)
+
+
